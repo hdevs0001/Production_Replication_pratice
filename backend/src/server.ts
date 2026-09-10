@@ -1,5 +1,6 @@
 // src/server.ts
-import 'dotenv/config'; // must be first — before any other import
+import 'dotenv/config';
+import './instrument'; // must load before app.ts and anything it imports
 
 import app from './app';
 import { config } from './config';
