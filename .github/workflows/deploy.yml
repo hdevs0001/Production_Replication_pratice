@@ -1,4 +1,4 @@
-name: Proudction Replication
+name: Production Replication
 
 on:
   workflow_dispatch:
@@ -6,20 +6,20 @@ on:
 jobs:
   test-ssh:
     runs-on: ubuntu-latest
-    
-    steps:
-    - name: Connect to Tailscale
-      uses: tailscale/github-action@v4
-      with:
-        oauth-client-id: ${{secrets.TS_OAUTH_CLIENT_ID}}
-        oauth-secret: ${{secrets.TS_OAUTH_SECRET}}
-        tags: tag:ci
 
-    - name: Configure SSH
-      env:
+    steps:
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+
+      - name: Configure SSH
+        env:
           SSH_PRIVATE_KEY: ${{ secrets.VM_SSH_PRIVATE_KEY }}
-          SSH_HOST: ${{ secrets.VM_USER }}
-      run: |
+          SSH_HOST: ${{ secrets.VM_TAILSCALE_IP }}
+        run: |
           mkdir -p ~/.ssh
 
           printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
@@ -28,12 +28,12 @@ jobs:
 
           ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts
 
-    - name: Test SSH connection
-      env:
-          SSH_HOST: ${{ secrets.VM_USER }}
+      - name: Test SSH connection
+        env:
+          SSH_HOST: ${{ secrets.VM_TAILSCALE_IP }}
           SSH_USER: ${{ secrets.VM_USER }}
-      run: |
+        run: |
           ssh \
             -i ~/.ssh/deploy_key \
             "$SSH_USER@$SSH_HOST" \
-            "echo 'SSH connection successful'"  
+            "echo 'SSH connection successful'; whoami; hostname; docker --version"
