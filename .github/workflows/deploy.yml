@@ -86,4 +86,34 @@ jobs:
           ssh \
             -i ~/.ssh/deploy_key \
             "$SSH_USER@$SSH_HOST" \
-            "curl --fail --silent --show-error http://localhost:3001/health"      
+            "curl --fail --silent --show-error http://localhost:3001/health" 
+                 
+      - name: Check frontend
+        env:
+          SSH_HOST: ${{ secrets.VM_TAILSCALE_IP }}
+          SSH_USER: ${{ secrets.VM_USER }}
+        run: |
+          ssh \
+            -i ~/.ssh/deploy_key \
+            "$SSH_USER@$SSH_HOST" \
+            "curl --fail --silent --show-error http://localhost:8080/"
+
+      - name: Check Prometheus
+        env:
+          SSH_HOST: ${{ secrets.VM_TAILSCALE_IP }}
+          SSH_USER: ${{ secrets.VM_USER }}
+        run: |
+          ssh \
+            -i ~/.ssh/deploy_key \
+            "$SSH_USER@$SSH_HOST" \
+            "curl --fail --silent --show-error http://localhost:9090/-/healthy"
+
+      - name: Check Grafana
+        env:
+          SSH_HOST: ${{ secrets.VM_TAILSCALE_IP }}
+          SSH_USER: ${{ secrets.VM_USER }}
+        run: |
+          ssh \
+            -i ~/.ssh/deploy_key \
+            "$SSH_USER@$SSH_HOST" \
+            "curl --fail --silent --show-error http://localhost:3300/api/health"    
