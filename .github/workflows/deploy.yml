@@ -1,13 +1,90 @@
-name: Production Replication
+
+name: Production Replication CI/CD
 
 on:
   workflow_dispatch:
 
 jobs:
-  test-ssh:
+
+  # ============================================================
+  # CI
+  # ============================================================
+
+  ci:
+    name: CI
     runs-on: ubuntu-latest
 
     steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+
+      # ========================================================
+      # Backend CI
+      # ========================================================
+
+      - name: Setup Node.js for backend
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: TypeScript check
+        working-directory: backend
+        run: npx tsc -p tsconfig.json --noEmit
+
+      - name: Backend tests
+        working-directory: backend
+        run: npm test
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL_TEST }}
+          NODE_ENV: test
+
+
+      # ========================================================
+      # Frontend CI
+      # ========================================================
+
+      - name: Setup Node.js for frontend
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+        env:
+          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
+          VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN }}
+
+
+  # ============================================================
+  # DEPLOY
+  # ============================================================
+
+  deploy:
+    name: Build, Deploy, Health Check & Rollback
+    needs: ci
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # ========================================================
+      # Connect to Tailscale
+      # ========================================================
+
       - name: Connect to Tailscale
         uses: tailscale/github-action@v4
         with:
@@ -15,10 +92,16 @@ jobs:
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
           tags: tag:ci
 
+
+      # ========================================================
+      # Configure SSH
+      # ========================================================
+
       - name: Configure SSH
         env:
           SSH_PRIVATE_KEY: ${{ secrets.VM_SSH_PRIVATE_KEY }}
           SSH_HOST: ${{ secrets.VM_TAILSCALE_IP }}
+
         run: |
           mkdir -p ~/.ssh
 
@@ -28,92 +111,462 @@ jobs:
 
           ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts
 
+
+      # ========================================================
+      # Test SSH
+      # ========================================================
+
       - name: Test SSH connection
         env:
           SSH_HOST: ${{ secrets.VM_TAILSCALE_IP }}
           SSH_USER: ${{ secrets.VM_USER }}
-        run: |
-          ssh \
-            -i ~/.ssh/deploy_key \
-            "$SSH_USER@$SSH_HOST" \
-            "echo 'SSH connection successful'; whoami; hostname; docker --version"
 
-      - name: Pull latest code
-        env:
-          SSH_HOST: ${{ secrets.VM_TAILSCALE_IP }}
-          SSH_USER: ${{ secrets.VM_USER }}
         run: |
           ssh \
             -i ~/.ssh/deploy_key \
             "$SSH_USER@$SSH_HOST" \
-            "cd /home/harman/proud-rep && git pull origin main"
+            "
+            echo 'SSH connection successful'
+            echo 'User:'
+            whoami
+            echo 'Hostname:'
+            hostname
+            echo 'Docker:'
+            docker --version
+            echo 'Docker Compose:'
+            docker compose version
+            "
 
-      - name: Check Docker
-        env:
-          SSH_HOST: ${{ secrets.VM_TAILSCALE_IP }}
-          SSH_USER: ${{ secrets.VM_USER }}
-        run: |
-          ssh \
-            -i ~/.ssh/deploy_key \
-            "$SSH_USER@$SSH_HOST" \
-            "docker --version && docker compose version"
 
-      - name: Deploy with Docker Compose
-        env:
-          SSH_HOST: ${{ secrets.VM_TAILSCALE_IP }}
-          SSH_USER: ${{ secrets.VM_USER }}
-        run: |
-          ssh \
-            -i ~/.ssh/deploy_key \
-            "$SSH_USER@$SSH_HOST" \
-            "cd /home/harman/proud-rep && docker compose up --build -d"      
-        
-      - name: Check containers
-        env:
-          SSH_HOST: ${{ secrets.VM_TAILSCALE_IP }}
-          SSH_USER: ${{ secrets.VM_USER }}
-        run: |
-          ssh \
-            -i ~/.ssh/deploy_key \
-            "$SSH_USER@$SSH_HOST" \
-            "cd /home/harman/proud-rep && docker compose ps"      
+      # ========================================================
+      # DEPLOYMENT
+      #
+      # The VM performs:
+      #
+      # 1. Save old commit
+      # 2. Pull new commit
+      # 3. Build images
+      # 4. Start new containers
+      # 5. Health check
+      #
+      # If anything fails:
+      #
+      # 6. Roll back to old commit
+      # 7. Rebuild old version
+      # 8. Start old version
+      # 9. Verify rollback
+      # ========================================================
 
-      - name: Check backend health
+      - name: Deploy application
         env:
           SSH_HOST: ${{ secrets.VM_TAILSCALE_IP }}
           SSH_USER: ${{ secrets.VM_USER }}
-        run: |
-          ssh \
-            -i ~/.ssh/deploy_key \
-            "$SSH_USER@$SSH_HOST" \
-            "curl --fail --silent --show-error http://localhost:3001/health" 
-                 
-      - name: Check frontend
-        env:
-          SSH_HOST: ${{ secrets.VM_TAILSCALE_IP }}
-          SSH_USER: ${{ secrets.VM_USER }}
-        run: |
-          ssh \
-            -i ~/.ssh/deploy_key \
-            "$SSH_USER@$SSH_HOST" \
-            "curl --fail --silent --show-error http://localhost:8080/"
 
-      - name: Check Prometheus
-        env:
-          SSH_HOST: ${{ secrets.VM_TAILSCALE_IP }}
-          SSH_USER: ${{ secrets.VM_USER }}
         run: |
           ssh \
             -i ~/.ssh/deploy_key \
             "$SSH_USER@$SSH_HOST" \
-            "curl --fail --silent --show-error http://localhost:9090/-/healthy"
+            'bash -s' <<'REMOTE_SCRIPT'
 
-      - name: Check Grafana
+          set -e
+
+          PROJECT_DIR="/home/harman/proud-rep"
+
+          cd "$PROJECT_DIR"
+
+          echo "=========================================="
+          echo "STARTING DEPLOYMENT"
+          echo "=========================================="
+
+
+          # ==================================================
+          # STEP 1 — SAVE CURRENT COMMIT
+          # ==================================================
+
+          OLD_COMMIT=$(git rev-parse HEAD)
+
+          echo "Current deployed commit:"
+          echo "$OLD_COMMIT"
+
+          echo "$OLD_COMMIT" > .previous_commit
+
+
+          # ==================================================
+          # STEP 2 — GET LATEST CODE
+          # ==================================================
+
+          echo
+          echo "Fetching latest code..."
+
+          git fetch origin main
+
+          NEW_COMMIT=$(git rev-parse origin/main)
+
+          echo "New commit:"
+          echo "$NEW_COMMIT"
+
+
+          # ==================================================
+          # Nothing changed?
+          # ==================================================
+
+          if [ "$OLD_COMMIT" = "$NEW_COMMIT" ]; then
+
+            echo
+            echo "Already running latest commit."
+            echo "No deployment required."
+
+            exit 0
+
+          fi
+
+
+          # ==================================================
+          # STEP 3 — UPDATE CODE
+          # ==================================================
+
+          echo
+          echo "Updating working tree..."
+
+          git reset --hard origin/main
+
+
+          # ==================================================
+          # STEP 4 — BUILD
+          # ==================================================
+
+          echo
+          echo "=========================================="
+          echo "BUILDING DOCKER IMAGES"
+          echo "=========================================="
+
+          docker compose build
+
+
+          # ==================================================
+          # STEP 5 — DEPLOY
+          # ==================================================
+
+          echo
+          echo "=========================================="
+          echo "STARTING NEW DEPLOYMENT"
+          echo "=========================================="
+
+          docker compose up -d
+
+          echo
+          echo "Containers after deployment:"
+
+          docker compose ps
+
+
+          # ==================================================
+          # STEP 6 — BACKEND HEALTH CHECK
+          # ==================================================
+
+          echo
+          echo "=========================================="
+          echo "CHECKING BACKEND"
+          echo "=========================================="
+
+          BACKEND_HEALTHY=false
+
+          for i in {1..12}; do
+
+            if curl \
+              --fail \
+              --silent \
+              --show-error \
+              http://localhost:3001/health; then
+
+              echo
+              echo "Backend is healthy."
+
+              BACKEND_HEALTHY=true
+
+              break
+
+            fi
+
+            echo
+            echo "Backend not ready."
+            echo "Attempt $i/12"
+
+            sleep 5
+
+          done
+
+
+          if [ "$BACKEND_HEALTHY" != "true" ]; then
+
+            echo
+            echo "Backend health check FAILED."
+
+            exit 1
+
+          fi
+
+
+          # ==================================================
+          # STEP 7 — FRONTEND HEALTH CHECK
+          # ==================================================
+
+          echo
+          echo "=========================================="
+          echo "CHECKING FRONTEND"
+          echo "=========================================="
+
+          curl \
+            --fail \
+            --silent \
+            --show-error \
+            http://localhost:8080/
+
+          echo
+          echo "Frontend is healthy."
+
+
+          # ==================================================
+          # STEP 8 — PROMETHEUS HEALTH CHECK
+          # ==================================================
+
+          echo
+          echo "=========================================="
+          echo "CHECKING PROMETHEUS"
+          echo "=========================================="
+
+          curl \
+            --fail \
+            --silent \
+            --show-error \
+            http://localhost:9090/-/healthy
+
+          echo
+          echo "Prometheus is healthy."
+
+
+          # ==================================================
+          # STEP 9 — GRAFANA HEALTH CHECK
+          # ==================================================
+
+          echo
+          echo "=========================================="
+          echo "CHECKING GRAFANA"
+          echo "=========================================="
+
+          curl \
+            --fail \
+            --silent \
+            --show-error \
+            http://localhost:3300/api/health
+
+          echo
+          echo "Grafana is healthy."
+
+
+          # ==================================================
+          # ALL HEALTH CHECKS PASSED
+          # ==================================================
+
+          echo
+          echo "=========================================="
+          echo "DEPLOYMENT SUCCESSFUL"
+          echo "=========================================="
+
+          echo "Old commit:"
+          echo "$OLD_COMMIT"
+
+          echo "New commit:"
+          echo "$NEW_COMMIT"
+
+          echo
+          echo "Application is healthy."
+
+          exit 0
+
+
+          # ==================================================
+          # FAILURE HANDLING
+          #
+          # NOTE:
+          # set -e normally exits immediately on failure.
+          #
+          # The outer GitHub Action will handle rollback.
+          # ==================================================
+
+          REMOTE_SCRIPT
+
+
+      # ========================================================
+      # ROLLBACK
+      # ========================================================
+
+      - name: Rollback deployment
+        if: failure()
+
         env:
           SSH_HOST: ${{ secrets.VM_TAILSCALE_IP }}
           SSH_USER: ${{ secrets.VM_USER }}
+
         run: |
           ssh \
             -i ~/.ssh/deploy_key \
             "$SSH_USER@$SSH_HOST" \
-            "curl --fail --silent --show-error http://localhost:3300/api/health"    
+            'bash -s' <<'REMOTE_SCRIPT'
+
+          set -e
+
+          PROJECT_DIR="/home/harman/proud-rep"
+
+          cd "$PROJECT_DIR"
+
+          echo "=========================================="
+          echo "DEPLOYMENT FAILED"
+          echo "STARTING ROLLBACK"
+          echo "=========================================="
+
+
+          # ==================================================
+          # Read previous commit
+          # ==================================================
+
+          if [ ! -f .previous_commit ]; then
+
+            echo "ERROR: Previous commit file not found."
+
+            exit 1
+
+          fi
+
+          OLD_COMMIT=$(cat .previous_commit)
+
+          echo
+          echo "Rolling back to:"
+          echo "$OLD_COMMIT"
+
+
+          # ==================================================
+          # Reset code
+          # ==================================================
+
+          git reset --hard "$OLD_COMMIT"
+
+
+          # ==================================================
+          # Rebuild old version
+          # ==================================================
+
+          echo
+          echo "Rebuilding previous version..."
+
+          docker compose build
+
+
+          # ==================================================
+          # Start old version
+          # ==================================================
+
+          echo
+          echo "Starting previous version..."
+
+          docker compose up -d
+
+
+          # ==================================================
+          # Show containers
+          # ==================================================
+
+          echo
+          echo "Containers after rollback:"
+
+          docker compose ps
+
+
+          # ==================================================
+          # Verify backend
+          # ==================================================
+
+          echo
+          echo "Checking backend after rollback..."
+
+          for i in {1..12}; do
+
+            if curl \
+              --fail \
+              --silent \
+              --show-error \
+              http://localhost:3001/health; then
+
+              echo
+              echo "=========================================="
+              echo "ROLLBACK SUCCESSFUL"
+              echo "=========================================="
+
+              exit 0
+
+            fi
+
+            echo
+            echo "Rollback service not ready."
+            echo "Attempt $i/12"
+
+            sleep 5
+
+          done
+
+
+          echo
+          echo "=========================================="
+          echo "ROLLBACK FAILED"
+          echo "=========================================="
+
+          exit 1
+
+          REMOTE_SCRIPT
+
+
+      # ========================================================
+      # CLEANUP
+      # ========================================================
+
+      - name: Cleanup Docker
+        if: always()
+
+        env:
+          SSH_HOST: ${{ secrets.VM_TAILSCALE_IP }}
+          SSH_USER: ${{ secrets.VM_USER }}
+
+        run: |
+          ssh \
+            -i ~/.ssh/deploy_key \
+            "$SSH_USER@$SSH_HOST" \
+            "
+            echo '=========================================='
+            echo 'DOCKER CLEANUP'
+            echo '=========================================='
+
+            docker image prune -f
+
+            echo 'Cleanup completed.'
+            "
+
+
+      # ========================================================
+      # FINAL STATUS
+      # ========================================================
+
+      - name: Deployment successful
+        if: success()
+
+        run: |
+          echo "=========================================="
+          echo "CI/CD PIPELINE SUCCESSFUL"
+          echo "=========================================="
+
+          echo "CI: PASSED"
+          echo "BUILD: PASSED"
+          echo "DEPLOY: PASSED"
+          echo "HEALTH CHECK: PASSED"
+          echo "ROLLBACK: NOT REQUIRED"
+          echo "CLEANUP: PASSED"
+
