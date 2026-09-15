@@ -17,7 +17,7 @@ jobs:
 
     - name: Configure SSH
       env:
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_PRIVATE_KEY: ${{ secrets.VM_SSH_PRIVATE_KEY }}
           SSH_HOST: ${{ secrets.VM_USER }}
       run: |
           mkdir -p ~/.ssh
