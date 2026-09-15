@@ -57,3 +57,23 @@ jobs:
             -i ~/.ssh/deploy_key \
             "$SSH_USER@$SSH_HOST" \
             "docker --version && docker compose version"
+
+      - name: Deploy with Docker Compose
+        env:
+          SSH_HOST: ${{ secrets.VM_TAILSCALE_IP }}
+          SSH_USER: ${{ secrets.VM_USER }}
+        run: |
+          ssh \
+            -i ~/.ssh/deploy_key \
+            "$SSH_USER@$SSH_HOST" \
+            "cd /home/harman/proud-rep && docker compose up --build -d"      
+        
+      - name: Check containers
+        env:
+          SSH_HOST: ${{ secrets.VM_TAILSCALE_IP }}
+          SSH_USER: ${{ secrets.VM_USER }}
+        run: |
+          ssh \
+            -i ~/.ssh/deploy_key \
+            "$SSH_USER@$SSH_HOST" \
+            "cd /home/harman/proud-rep && docker compose ps"      
