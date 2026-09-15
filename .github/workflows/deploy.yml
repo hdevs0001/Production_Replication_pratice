@@ -15,21 +15,25 @@ jobs:
         oauth-secret: ${{secrets.TS_OAUTH_SECRET}}
         tags: tag:ci
 
-    - name: Test SSH Connection
-      uses: appleboy/ssh-action@v1.0.0
-      with:
-        host: ${{secrets.VM_TAILSCALE_IP}}
-        username: ${{secrets.VM_USER}} 
-        key: ${{secrets.VM_SSH_PRIVATE_KEY}}
-        script: |
-         echo "Connected to Ubuntu VM!"
-         echo "User:"
-         whoami
-         echo "Hostname:"
-         hostname
-         echo "Docker:"
-         docker --version
-         echo "Project:"
-         cd "${{secrets.VM_PROJECT_PATH}}"
-         pwd
-         echo "Connection test Successful !"   
+    - name: Configure SSH
+      env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.VM_USER }}
+      run: |
+          mkdir -p ~/.ssh
+
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+
+          chmod 600 ~/.ssh/deploy_key
+
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts
+
+    - name: Test SSH connection
+      env:
+          SSH_HOST: ${{ secrets.VM_USER }}
+          SSH_USER: ${{ secrets.VM_USER }}
+      run: |
+          ssh \
+            -i ~/.ssh/deploy_key \
+            "$SSH_USER@$SSH_HOST" \
+            "echo 'SSH connection successful'"  
