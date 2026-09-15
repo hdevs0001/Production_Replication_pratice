@@ -37,3 +37,23 @@ jobs:
             -i ~/.ssh/deploy_key \
             "$SSH_USER@$SSH_HOST" \
             "echo 'SSH connection successful'; whoami; hostname; docker --version"
+
+      - name: Pull latest code
+        env:
+          SSH_HOST: ${{ secrets.VM_TAILSCALE_IP }}
+          SSH_USER: ${{ secrets.VM_USER }}
+        run: |
+          ssh \
+            -i ~/.ssh/deploy_key \
+            "$SSH_USER@$SSH_HOST" \
+            "cd /home/harman/proud-rep && git pull origin main"
+
+      - name: Check Docker
+        env:
+          SSH_HOST: ${{ secrets.VM_TAILSCALE_IP }}
+          SSH_USER: ${{ secrets.VM_USER }}
+        run: |
+          ssh \
+            -i ~/.ssh/deploy_key \
+            "$SSH_USER@$SSH_HOST" \
+            "docker --version && docker compose version"
