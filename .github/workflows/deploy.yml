@@ -1,0 +1,35 @@
+name: Proudction Replication
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-ssh:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Connect to Tailscale
+      uses: tailscale/github-action@v4
+      with:
+        oauth-client-id: ${{secrets.TS_OAUTH_CLIENT_ID}}
+        oauth-secret: ${{secrets.TS_OAUTH_SECRET}}
+        tags: tag:ci
+
+    - name: Test SSH Connection
+      uses: appleboy/ssh-action@v1.0.0
+      with:
+        host: ${{secrets.VM_TAILSCALE_IP}}
+        username: ${{secrets.VM_USER}} 
+        key: ${{secrets.VM_SSH_PRIVATE_KEY}}
+        script: |
+         echo "Connected to Ubuntu VM!"
+         echo "User:"
+         whoami
+         echo "Hostname:"
+         hostname
+         echo "Docker:"
+         docker --version
+         echo "Project:"
+         cd "${{secrets.VM_PROJECT_PATH}}"
+         pwd
+         echo "Connection test Successful !"   
